@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String,Date,ForeignKey
 from database import Base
 
 
@@ -9,3 +9,14 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, nullable=False)
     password = Column(String, nullable =False)
+
+class Jobapplication(Base):
+    _tablename__ = "job application"
+
+    id =Column(Integer,primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    company = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    job_url = Column(String)
+    status = Column(String, nullable=False)
+    applied_date = Column(Date, nullable=False)    
