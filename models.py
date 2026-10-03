@@ -11,7 +11,7 @@ class User(Base):
     password = Column(String, nullable =False)
 
 class Jobapplication(Base):
-    _tablename__ = "job application"
+    __tablename__ = "Job Application"
 
     id =Column(Integer,primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
