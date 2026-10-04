@@ -10,7 +10,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     password = Column(String, nullable =False)
 
-class Jobapplication(Base):
+class JobApplication(Base):
     __tablename__ = "Job Application"
 
     id =Column(Integer,primary_key=True)
