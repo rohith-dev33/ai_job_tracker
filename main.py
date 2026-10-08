@@ -27,6 +27,8 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
+    print("TOKEN PARTS:", len(token.split(".")))
+    print("TOKEN START:", token[:10])
     payload = decode_access_token(token)
 
     if payload is None:
@@ -121,3 +123,14 @@ def login_user(
 @app.get("/me", response_model=UserResponse)
 def get_me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+@app.get("/jobs")
+def get_jobs(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    return db.query(models.JobApplication).filter(
+        models.JobApplication.user_id == current_user.id
+    ).all()
+
+
