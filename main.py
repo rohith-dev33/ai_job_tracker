@@ -80,6 +80,16 @@ def create_job(
 
 @app.post("/register")
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(models.User).filter(
+    models.User.email == user.email
+).first()
+
+    
+    if existing_user:
+          raise HTTPException(
+        status_code=409,
+        detail="Email already registered"
+    )
     hashed_password = hash_password(user.password)
 
     new_user = models.User(
@@ -134,3 +144,74 @@ def get_jobs(
     ).all()
 
 
+@app.get("/jobs/{job_id}")
+def get_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    job = db.query(models.JobApplication).filter(
+        models.JobApplication.id == job_id,
+        models.JobApplication.user_id == current_user.id
+    ).first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    return job
+
+
+@app.patch("/jobs/{job_id}")
+def update_job(
+    job_id: int,
+    job_update: JobApplicationCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    job = db.query(models.JobApplication).filter(
+        models.JobApplication.id == job_id,
+        models.JobApplication.user_id == current_user.id
+    ).first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    job.company = job_update.company
+    job.role = job_update.role
+    job.job_url = job_update.job_url
+    job.status = job_update.status
+    job.applied_date = job_update.applied_date
+
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+    
+@app.delete("/jobs/{job_id}")
+def delete_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    job = db.query(models.JobApplication).filter(
+        models.JobApplication.id == job_id,
+        models.JobApplication.user_id == current_user.id
+    ).first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found"
+        )
+
+    db.delete(job)
+    db.commit()
+
+    return {"message": "Job deleted successfully"}
