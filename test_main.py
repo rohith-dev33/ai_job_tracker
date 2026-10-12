@@ -9,9 +9,14 @@ from sqlalchemy.orm import sessionmaker
 
 from main import app, get_db
 from database import Base
+from models import User, JobApplication
+from authentication import hash_password
 
 
-# Connect to the test database
+# -------------------------
+# Test database configuration
+# -------------------------
+
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 
 if not TEST_DATABASE_URL:
@@ -25,8 +30,9 @@ TestingSessionLocal = sessionmaker(
     bind=test_engine,
 )
 
+Base.metadata.create_all(bind=test_engine)
 
-# Use the test database for API requests
+
 def override_get_db():
     db = TestingSessionLocal()
     try:
@@ -37,45 +43,109 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
-Base.metadata.create_all(bind=test_engine)
-
 client = TestClient(app)
 
 
-# Clean up test users before each test
+# -------------------------
+# Test helpers
+# -------------------------
+
+TEST_EMAILS = [
+    "register_test@example.com",
+    "duplicate_test@example.com",
+    "login_test@example.com",
+    "me_test@example.com",
+    "create_job_test@example.com",
+    "list_job_test@example.com",
+    "owner_test@example.com",
+    "other_test@example.com",
+    "update_job_test@example.com",
+    "delete_job_test@example.com",
+]
+
+TEST_PASSWORD = "TestPassword123!"
+
+
 @pytest.fixture(autouse=True)
-def clean_test_users():
-    from models import User, JobApplication
+def clean_test_data():
+    """Remove test data before and after each test."""
+    def cleanup():
+        db = TestingSessionLocal()
+        try:
+            user_ids = db.query(User.id).filter(
+                User.email.in_(TEST_EMAILS)
+            )
 
-    test_emails = [
-        "duplicate_test@example.com",
-        "owner_test@example.com",
-        "other_test@example.com",
-    ]
+            db.query(JobApplication).filter(
+                JobApplication.user_id.in_(user_ids)
+            ).delete(synchronize_session=False)
 
+            db.query(User).filter(
+                User.email.in_(TEST_EMAILS)
+            ).delete(synchronize_session=False)
+
+            db.commit()
+        finally:
+            db.close()
+
+    cleanup()
+    yield
+    cleanup()
+
+
+def create_test_user(email, password=TEST_PASSWORD):
     db = TestingSessionLocal()
-
     try:
-        user_ids = db.query(User.id).filter(
-            User.email.in_(test_emails)
+        user = User(
+            name="Test User",
+            email=email,
+            password=hash_password(password),
         )
-
-        db.query(JobApplication).filter(
-            JobApplication.user_id.in_(user_ids)
-        ).delete(synchronize_session=False)
-
-        db.query(User).filter(
-            User.email.in_(test_emails)
-        ).delete(synchronize_session=False)
-
+        db.add(user)
         db.commit()
+        db.refresh(user)
+        return user.id
     finally:
         db.close()
 
-    yield
+
+def get_token(email, password=TEST_PASSWORD):
+    response = client.post(
+        "/login",
+        data={
+            "username": email,
+            "password": password,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+
+    return response.json()["access_token"]
 
 
-# Test 1: Home endpoint
+def job_payload(company="Test Company", role="Backend Developer"):
+    return {
+        "company": company,
+        "role": role,
+        "job_url": "https://example.com/job",
+        "status": "Applied",
+        "applied_date": date.today().isoformat(),
+    }
+
+
+def create_job_with_token(token, payload=None):
+    return client.post(
+        "/jobs",
+        json=payload or job_payload(),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+# -------------------------
+# 1. Basic API tests
+# -------------------------
+
 def test_home():
     response = client.get("/")
 
@@ -83,106 +153,359 @@ def test_home():
     assert response.json() == {"message": "AI JOB TRACKER"}
 
 
-# Test 2: Access /me without a token
+def test_unknown_route():
+    response = client.get("/route-that-does-not-exist")
+
+    assert response.status_code == 404
+
+
+# -------------------------
+# 2. Registration tests
+# -------------------------
+
+def test_register_user():
+    response = client.post(
+        "/register",
+        json={
+            "name": "Register Test",
+            "email": "register_test@example.com",
+            "password": TEST_PASSWORD,
+        },
+    )
+
+    assert response.status_code in (200, 201)
+    assert response.json()["email"] == "register_test@example.com"
+
+
+def test_duplicate_registration():
+    data = {
+        "name": "Duplicate Test",
+        "email": "duplicate_test@example.com",
+        "password": TEST_PASSWORD,
+    }
+
+    first = client.post("/register", json=data)
+    second = client.post("/register", json=data)
+
+    assert first.status_code in (200, 201)
+    assert second.status_code == 409
+
+
+def test_register_missing_required_field():
+    response = client.post(
+        "/register",
+        json={
+            "name": "Incomplete User",
+            "email": "register_test@example.com",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+# -------------------------
+# 3. Login tests
+# -------------------------
+
+def test_login_success():
+    email = "login_test@example.com"
+    create_test_user(email)
+
+    response = client.post(
+        "/login",
+        data={
+            "username": email,
+            "password": TEST_PASSWORD,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+    assert response.json()["token_type"] == "bearer"
+
+
+def test_login_unknown_email():
+    response = client.post(
+        "/login",
+        data={
+            "username": "unknown_test@example.com",
+            "password": TEST_PASSWORD,
+        },
+    )
+
+    # Current API returns a message with status 200.
+    assert response.status_code == 200
+    assert response.json()["message"] == "Invalid email or password"
+
+
+def test_login_wrong_password():
+    email = "login_test@example.com"
+    create_test_user(email)
+
+    response = client.post(
+        "/login",
+        data={
+            "username": email,
+            "password": "WrongPassword123!",
+        },
+    )
+
+    # Current API returns a message with status 200.
+    assert response.status_code == 200
+    assert response.json()["message"] == "Invalid email or password"
+
+
+# -------------------------
+# 4. Authentication tests
+# -------------------------
+
 def test_me_without_token():
     response = client.get("/me")
 
     assert response.status_code == 401
 
 
-# Test 3: Duplicate registration should fail
-def test_duplicate_registration():
-    email = "duplicate_test@example.com"
-
-    user_data = {
-        "name": "Test User",
-        "email": email,
-        "password": "TestPassword123!",
-    }
-
-    first_response = client.post(
-        "/register",
-        json=user_data,
+def test_me_with_invalid_token():
+    response = client.get(
+        "/me",
+        headers={"Authorization": "Bearer invalid-token"},
     )
 
-    assert first_response.status_code in (200, 201)
+    assert response.status_code == 401
 
-    second_response = client.post(
-        "/register",
-        json=user_data,
+
+def test_me_with_valid_token():
+    email = "me_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    response = client.get(
+        "/me",
+        headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert second_response.status_code == 409
+    assert response.status_code == 200
+    assert response.json()["email"] == email
 
 
-# Test 4: A user cannot access another user's job
-def test_user_cannot_access_another_users_job():
-    from models import User, JobApplication
-    from authentication import hash_password
+# -------------------------
+# 5. Create and list jobs
+# -------------------------
 
-    db = TestingSessionLocal()
+def test_create_job_with_token():
+    email = "create_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
 
-    user_a_email = "owner_test@example.com"
-    user_b_email = "other_test@example.com"
+    response = create_job_with_token(token)
 
-    try:
-        # Create two users
-        user_a = User(
-            name="Owner Test",
-            email=user_a_email,
-            password=hash_password("TestPassword123!"),
-        )
+    assert response.status_code in (200, 201)
+    assert response.json()["company"] == "Test Company"
+    assert response.json()["role"] == "Backend Developer"
 
-        user_b = User(
-            name="Other Test",
-            email=user_b_email,
-            password=hash_password("TestPassword123!"),
-        )
 
-        db.add_all([user_a, user_b])
-        db.commit()
-
-        db.refresh(user_a)
-        db.refresh(user_b)
-
-        # Create a job belonging to User A
-        job = JobApplication(
-            user_id=user_a.id,
-            company="Test Company",
-            role="Developer",
-            job_url="https://example.com/job",
-            status="Applied",
-            applied_date=date.today(),
-        )
-
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-
-        job_id = job.id
-
-    finally:
-        db.close()
-
-    # Log in as User B
-    login_response = client.post(
-        "/login",
-        data={
-            "username": user_b_email,
-            "password": "TestPassword123!",
-        },
+def test_create_job_without_token():
+    response = client.post(
+        "/jobs",
+        json=job_payload(),
     )
 
-    assert login_response.status_code == 200
+    assert response.status_code == 401
 
-    token = login_response.json()["access_token"]
 
-    # User B tries to access User A's job
+def test_create_job_with_invalid_data():
+    email = "create_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    response = create_job_with_token(
+        token,
+        {"company": "Missing required fields"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_list_own_jobs():
+    email = "list_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    created = create_job_with_token(token)
+    assert created.status_code in (200, 201)
+
+    response = client.get(
+        "/jobs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert any(
+        job["id"] == created.json()["id"]
+        for job in response.json()
+    )
+
+
+# -------------------------
+# 6. View jobs and user isolation
+# -------------------------
+
+def test_get_own_job():
+    email = "owner_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    created = create_job_with_token(token)
+    job_id = created.json()["id"]
+
     response = client.get(
         f"/jobs/{job_id}",
-        headers={
-            "Authorization": f"Bearer {token}",
-        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == job_id
+
+
+def test_user_cannot_access_another_users_job():
+    owner_email = "owner_test@example.com"
+    other_email = "other_test@example.com"
+
+    create_test_user(owner_email)
+    create_test_user(other_email)
+
+    owner_token = get_token(owner_email)
+    other_token = get_token(other_email)
+
+    created = create_job_with_token(owner_token)
+    assert created.status_code in (200, 201)
+
+    job_id = created.json()["id"]
+
+    response = client.get(
+        f"/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_get_nonexistent_job():
+    email = "owner_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    response = client.get(
+        "/jobs/999999999",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+# -------------------------
+# 7. Update jobs
+# -------------------------
+
+def test_update_own_job():
+    email = "update_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    created = create_job_with_token(token)
+    assert created.status_code in (200, 201)
+
+    job_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/jobs/{job_id}",
+        json=job_payload(
+            company="Updated Company",
+            role="Senior Developer",
+        ),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["company"] == "Updated Company"
+    assert updated.json()["role"] == "Senior Developer"
+
+
+def test_user_cannot_update_another_users_job():
+    create_test_user("owner_test@example.com")
+    create_test_user("other_test@example.com")
+
+    owner_token = get_token("owner_test@example.com")
+    other_token = get_token("other_test@example.com")
+
+    created = create_job_with_token(owner_token)
+    assert created.status_code in (200, 201)
+
+    response = client.patch(
+        f"/jobs/{created.json()['id']}",
+        json=job_payload(company="Unauthorized Change"),
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+
+    assert response.status_code == 404
+
+
+# -------------------------
+# 8. Delete jobs
+# -------------------------
+
+def test_delete_own_job():
+    email = "delete_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    created = create_job_with_token(token)
+    assert created.status_code in (200, 201)
+
+    job_id = created.json()["id"]
+
+    deleted = client.delete(
+        f"/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json()["message"] == "Job deleted successfully"
+
+    fetched = client.get(
+        f"/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert fetched.status_code == 404
+
+
+def test_user_cannot_delete_another_users_job():
+    create_test_user("owner_test@example.com")
+    create_test_user("other_test@example.com")
+
+    owner_token = get_token("owner_test@example.com")
+    other_token = get_token("other_test@example.com")
+
+    created = create_job_with_token(owner_token)
+    assert created.status_code in (200, 201)
+
+    response = client.delete(
+        f"/jobs/{created.json()['id']}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_delete_nonexistent_job():
+    email = "delete_job_test@example.com"
+    create_test_user(email)
+    token = get_token(email)
+
+    response = client.delete(
+        "/jobs/999999999",
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 404
