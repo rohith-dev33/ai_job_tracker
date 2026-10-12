@@ -10,7 +10,7 @@ from schemas import UserCreate, UserLogin, JobApplicationCreate, UserResponse
 from authentication import hash_password, verify_password,create_access_token,decode_access_token
 app = FastAPI(title="AI JOB TRACKER")
 
-Base.metadata.create_all(bind=engine)
+
 
 
 @app.get("/")
