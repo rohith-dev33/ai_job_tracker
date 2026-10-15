@@ -1,6 +1,8 @@
 from fastapi import FastAPI,Depends,Form,HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from ai_service import analyze_job_description
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 from database import Base, engine,SessionLocal
@@ -10,7 +12,8 @@ from schemas import UserCreate, UserLogin, JobApplicationCreate, UserResponse
 from authentication import hash_password, verify_password,create_access_token,decode_access_token
 app = FastAPI(title="AI JOB TRACKER")
 
-
+class JobDescriptionRequest(BaseModel):
+    description: str
 
 
 @app.get("/")
@@ -215,3 +218,22 @@ def delete_job(
     db.commit()
 
     return {"message": "Job deleted successfully"}
+
+@app.post("/ai/analyze-job")
+def analyze_job(request: JobDescriptionRequest):
+    if not request.description.strip():
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail="Job description cannot be empty",
+        )
+
+    try:
+        analysis = analyze_job_description(request.description)
+        return {"analysis": analysis}
+    except Exception:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=502,
+            detail="AI analysis is temporarily unavailable. Please try again.",
+        )
