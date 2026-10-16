@@ -1,7 +1,7 @@
 from fastapi import FastAPI,Depends,Form,HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from ai_service import analyze_job_description
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
@@ -13,7 +13,10 @@ from authentication import hash_password, verify_password,create_access_token,de
 app = FastAPI(title="AI JOB TRACKER")
 
 class JobDescriptionRequest(BaseModel):
-    description: str
+    description: str = Field(
+        min_length=20,
+        max_length=10000
+    )
 
 
 @app.get("/")

@@ -1,6 +1,7 @@
 
 import os
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -509,3 +510,66 @@ def test_delete_nonexistent_job():
     )
 
     assert response.status_code == 404
+
+
+
+# -------------------------
+# 9. AI job analysis tests
+# -------------------------
+
+
+
+
+@patch("main.analyze_job_description")
+def test_ai_analyze_job_success(mock_analyze):
+    mock_analyze.return_value = (
+        "Required skills: Python, FastAPI, PostgreSQL\n"
+        "Main responsibilities: Build backend APIs\n"
+        "Experience level: Not specified"
+    )
+
+    response = client.post(
+        "/ai/analyze-job",
+        json={
+            "description": (
+                "Python backend developer with FastAPI "
+                "and PostgreSQL experience."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert "analysis" in response.json()
+    assert "Python" in response.json()["analysis"]
+    mock_analyze.assert_called_once()
+
+
+@patch("main.analyze_job_description")
+def test_ai_analyze_job_description_too_short(mock_analyze):
+    response = client.post(
+        "/ai/analyze-job",
+        json={"description": "Python developer"},
+    )
+
+    assert response.status_code == 422
+    mock_analyze.assert_not_called()
+
+
+@patch("main.analyze_job_description")
+def test_ai_analyze_job_service_failure(mock_analyze):
+    mock_analyze.side_effect = Exception("AI service unavailable")
+
+    response = client.post(
+        "/ai/analyze-job",
+        json={
+            "description": (
+                "Python backend developer with FastAPI "
+                "and PostgreSQL experience."
+            )
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "AI analysis is temporarily unavailable. Please try again."
+    )
